@@ -49,6 +49,33 @@ function(globalizer_add_main_library)
 endfunction()
 
 # ---------------------------------------------------------------------------
+#  Библиотека, без которой не компонуется std::filesystem: "" - не нужна (MSVC, GCC 9+, libc++ 9+),
+#  stdc++fs - libstdc++ GCC 8, c++fs - старая libc++.
+# ---------------------------------------------------------------------------
+function(globalizer_filesystem_library out_var)
+  include(CheckCXXSourceCompiles)
+  set(_src "#include <filesystem>\nint main() { return std::filesystem::current_path().empty() ? 1 : 0; }\n")
+  check_cxx_source_compiles("${_src}" GLOBALIZER_FILESYSTEM_BUILTIN)
+  set(_lib "")
+  if (NOT GLOBALIZER_FILESYSTEM_BUILTIN)
+    set(CMAKE_REQUIRED_LIBRARIES stdc++fs)
+    check_cxx_source_compiles("${_src}" GLOBALIZER_FILESYSTEM_STDCXXFS)
+    if (GLOBALIZER_FILESYSTEM_STDCXXFS)
+      set(_lib stdc++fs)
+    else()
+      set(CMAKE_REQUIRED_LIBRARIES c++fs)
+      check_cxx_source_compiles("${_src}" GLOBALIZER_FILESYSTEM_CXXFS)
+      if (GLOBALIZER_FILESYSTEM_CXXFS)
+        set(_lib c++fs)
+      else()
+        message(WARNING "std::filesystem does not link even with stdc++fs / c++fs")
+      endif()
+    endif()
+  endif()
+  set(${out_var} "${_lib}" PARENT_SCOPE)
+endfunction()
+
+# ---------------------------------------------------------------------------
 #  Привязка зависимостей к библиотеке + имена выходных файлов + порядок MP.
 # ---------------------------------------------------------------------------
 function(globalizer_link_main_library)
@@ -80,6 +107,15 @@ function(globalizer_link_main_library)
   if (NOT WIN32)
     find_package(Threads REQUIRED)
     target_link_libraries(${GLOBALIZER_LIB_NAME} PUBLIC ${CMAKE_DL_LIBS} Threads::Threads)
+  endif()
+
+  # std::filesystem (Plotters, тесты): в libstdc++ до GCC 9 (CentOS/RHEL 8 - GCC 8, его библиотеку
+  # использует и icpc) реализация лежит в отдельной libstdc++fs, без неё компоновка падает
+  # ("undefined reference to std::filesystem::current_path"). PUBLIC - как и libdl выше.
+  globalizer_filesystem_library(_fs_lib)
+  if (_fs_lib)
+    message(STATUS "std::filesystem needs: ${_fs_lib}")
+    target_link_libraries(${GLOBALIZER_LIB_NAME} PUBLIC ${_fs_lib})
   endif()
 
   # Порядок сборки MP-библиотек (gmp/mpfr/mpir): они линкуются "по имени"
